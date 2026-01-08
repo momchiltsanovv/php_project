@@ -92,13 +92,13 @@ $conn->close();
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Search Users - Mini Social Media</title>
+    <title>Search Users - Echo</title>
     <link rel="stylesheet" href="assets/css/style.css">
 </head>
 <body>
     <nav class="navbar">
         <div class="nav-container">
-            <h2 class="nav-brand">Mini Social Media</h2>
+            <h2 class="nav-brand">Echo</h2>
             <div class="nav-links">
                 <a href="feed.php" class="nav-link">Feed</a>
                 <a href="search.php" class="nav-link active">Search</a>

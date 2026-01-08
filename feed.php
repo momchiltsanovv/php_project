@@ -180,6 +180,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['toggle_like'])) {
     exit();
 }
 
+// Handle post edit
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['edit_post'])) {
+    $post_id = intval($_POST['post_id']);
+    $new_content = trim($_POST['edit_content'] ?? '');
+    
+    // Verify user owns this post
+    $stmt = $conn->prepare("SELECT user_id FROM posts WHERE id = ?");
+    $stmt->bind_param("i", $post_id);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $post_owner = $result->fetch_assoc();
+    $stmt->close();
+    
+    if ($post_owner && $post_owner['user_id'] == $user_id) {
+        // Validate content
+        if (strlen($new_content) > 1000) {
+            $post_error = 'Post content is too long (max 1000 characters).';
+        } else {
+            // Update post content
+            $stmt = $conn->prepare("UPDATE posts SET content = ? WHERE id = ? AND user_id = ?");
+            $stmt->bind_param("sii", $new_content, $post_id, $user_id);
+            
+            if ($stmt->execute()) {
+                $post_success = 'Post updated successfully!';
+                header('Location: feed.php');
+                exit();
+            } else {
+                $post_error = 'Failed to update post.';
+            }
+            $stmt->close();
+        }
+    } else {
+        $post_error = 'You can only edit your own posts.';
+    }
+}
+
 // Handle comment creation
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_comment'])) {
     $post_id = intval($_POST['post_id']);
@@ -211,7 +247,8 @@ $posts_query = "
     SELECT p.*, u.id as user_id, u.username, u.first_name, u.last_name,
            (SELECT COUNT(*) FROM likes WHERE post_id = p.id) as like_count,
            (SELECT COUNT(*) FROM likes WHERE post_id = p.id AND user_id = ?) as is_liked,
-           (SELECT COUNT(*) FROM comments WHERE post_id = p.id) as comment_count
+           (SELECT COUNT(*) FROM comments WHERE post_id = p.id) as comment_count,
+           (p.user_id = ?) as is_owner
     FROM posts p
     INNER JOIN users u ON p.user_id = u.id
     WHERE p.user_id = ? 
@@ -225,7 +262,7 @@ $posts_query = "
 ";
 
 $stmt = $conn->prepare($posts_query);
-$stmt->bind_param("iiii", $user_id, $user_id, $user_id, $user_id);
+$stmt->bind_param("iiiii", $user_id, $user_id, $user_id, $user_id, $user_id);
 $stmt->execute();
 $posts_result = $stmt->get_result();
 $posts = [];
@@ -257,13 +294,13 @@ $conn->close();
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Feed - Mini Social Media</title>
+    <title>Feed - Echo</title>
     <link rel="stylesheet" href="assets/css/style.css">
 </head>
 <body>
     <nav class="navbar">
         <div class="nav-container">
-            <h2 class="nav-brand">Mini Social Media</h2>
+            <h2 class="nav-brand">Echo</h2>
             <div class="nav-links">
                 <a href="feed.php" class="nav-link active">Feed</a>
                 <a href="search.php" class="nav-link">Search</a>
@@ -348,10 +385,16 @@ $conn->close();
                                     </button>
                                 </form>
                                 <button class="btn-comment" onclick="toggleComments(<?php echo $post['id']; ?>)">💬</button>
+                                <?php if ($post['is_owner']): ?>
+                                    <button class="btn-edit" onclick="openEditModal(<?php echo $post['id']; ?>, '<?php echo htmlspecialchars(addslashes($post['content'])); ?>')">✏️</button>
+                                <?php endif; ?>
                             </div>
                             
                             <div class="post-stats">
                                 <strong><?php echo $post['like_count']; ?> likes</strong>
+                                <?php if ($post['comment_count'] > 0): ?>
+                                    <strong><?php echo $post['comment_count']; ?> comments</strong>
+                                <?php endif; ?>
                             </div>
                             
                             <!-- Comments Section -->
@@ -386,6 +429,26 @@ $conn->close();
         </div>
     </div>
     
+    <!-- Edit Post Modal -->
+    <div id="editModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Edit Post</h2>
+                <button class="modal-close" onclick="closeEditModal()">×</button>
+            </div>
+            <form method="POST" action="" id="editPostForm">
+                <input type="hidden" name="post_id" id="edit_post_id">
+                <div class="form-group" style="padding: 20px; margin: 0;">
+                    <textarea name="edit_content" id="edit_content" rows="5" maxlength="1000" required style="width: 100%; padding: 12px; border: 1px solid var(--border-color); border-radius: var(--radius); font-size: 14px; font-family: inherit; resize: vertical; min-height: 120px; background: var(--bg-secondary); color: var(--text-color);"></textarea>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" onclick="closeEditModal()">Cancel</button>
+                    <button type="submit" name="edit_post" class="btn btn-primary">Save Changes</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
     <script>
         function toggleComments(postId) {
             const commentsSection = document.getElementById('comments-' + postId);
@@ -408,6 +471,35 @@ $conn->close();
             document.getElementById('image-preview').style.display = 'none';
             document.getElementById('preview-img').src = '';
         }
+        
+        function openEditModal(postId, content) {
+            document.getElementById('edit_post_id').value = postId;
+            // Convert HTML line breaks back to newlines for editing
+            const textContent = content.replace(/<br\s*\/?>/gi, '\n');
+            document.getElementById('edit_content').value = textContent;
+            document.getElementById('editModal').style.display = 'flex';
+            document.getElementById('edit_content').focus();
+        }
+        
+        function closeEditModal() {
+            document.getElementById('editModal').style.display = 'none';
+            document.getElementById('edit_content').value = '';
+        }
+        
+        // Close modal when clicking outside
+        window.onclick = function(event) {
+            const modal = document.getElementById('editModal');
+            if (event.target == modal) {
+                closeEditModal();
+            }
+        }
+        
+        // Close modal with Escape key
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'Escape') {
+                closeEditModal();
+            }
+        });
     </script>
 </body>
 </html>

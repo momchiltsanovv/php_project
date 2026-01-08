@@ -32,6 +32,65 @@ $stmt->execute();
 $stats = $stmt->get_result()->fetch_assoc();
 $stmt->close();
 
+// Get followers count (people who follow this user)
+$stmt = $conn->prepare("SELECT COUNT(*) as followers_count FROM friendships WHERE friend_id = ?");
+$stmt->bind_param("i", $profile_user_id);
+$stmt->execute();
+$followers_result = $stmt->get_result()->fetch_assoc();
+$stats['followers_count'] = $followers_result['followers_count'];
+$stmt->close();
+
+// Get following count (people this user follows)
+$stmt = $conn->prepare("SELECT COUNT(*) as following_count FROM friendships WHERE user_id = ?");
+$stmt->bind_param("i", $profile_user_id);
+$stmt->execute();
+$following_result = $stmt->get_result()->fetch_assoc();
+$stats['following_count'] = $following_result['following_count'];
+$stmt->close();
+
+// Handle followers/following list requests
+$show_followers = isset($_GET['show']) && $_GET['show'] === 'followers';
+$show_following = isset($_GET['show']) && $_GET['show'] === 'following';
+
+$followers_list = [];
+$following_list = [];
+
+if ($show_followers) {
+    // Get list of followers (people who follow this user)
+    $stmt = $conn->prepare("
+        SELECT u.id, u.username, u.first_name, u.last_name, u.bio
+        FROM friendships f
+        INNER JOIN users u ON f.user_id = u.id
+        WHERE f.friend_id = ?
+        ORDER BY u.first_name, u.last_name
+    ");
+    $stmt->bind_param("i", $profile_user_id);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    while ($row = $result->fetch_assoc()) {
+        $followers_list[] = $row;
+    }
+    $stmt->close();
+}
+
+if ($show_following) {
+    // Get list of people this user follows
+    $stmt = $conn->prepare("
+        SELECT u.id, u.username, u.first_name, u.last_name, u.bio
+        FROM friendships f
+        INNER JOIN users u ON f.friend_id = u.id
+        WHERE f.user_id = ?
+        ORDER BY u.first_name, u.last_name
+    ");
+    $stmt->bind_param("i", $profile_user_id);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    while ($row = $result->fetch_assoc()) {
+        $following_list[] = $row;
+    }
+    $stmt->close();
+}
+
 // Check if current user is following this profile
 $is_following = false;
 if (!$is_own_profile) {
@@ -46,17 +105,35 @@ if (!$is_own_profile) {
 $stmt = $conn->prepare("
     SELECT p.*, 
            (SELECT COUNT(*) FROM likes WHERE post_id = p.id) as like_count,
-           (SELECT COUNT(*) FROM comments WHERE post_id = p.id) as comment_count
+           (SELECT COUNT(*) FROM comments WHERE post_id = p.id) as comment_count,
+           (p.user_id = ?) as is_owner
     FROM posts p
     WHERE p.user_id = ?
     ORDER BY p.created_at DESC
     LIMIT 20
 ");
-$stmt->bind_param("i", $profile_user_id);
+$stmt->bind_param("ii", $current_user_id, $profile_user_id);
 $stmt->execute();
 $posts_result = $stmt->get_result();
 $user_posts = [];
 while ($post = $posts_result->fetch_assoc()) {
+    // Get comments for this post
+    $comments_stmt = $conn->prepare("
+        SELECT c.*, u.username, u.first_name, u.last_name,
+               (c.user_id = ?) as is_comment_owner
+        FROM comments c 
+        INNER JOIN users u ON c.user_id = u.id 
+        WHERE c.post_id = ? 
+        ORDER BY c.created_at ASC
+    ");
+    $comments_stmt->bind_param("ii", $current_user_id, $post['id']);
+    $comments_stmt->execute();
+    $comments_result = $comments_stmt->get_result();
+    $post['comments'] = [];
+    while ($comment = $comments_result->fetch_assoc()) {
+        $post['comments'][] = $comment;
+    }
+    $comments_stmt->close();
     $user_posts[] = $post;
 }
 $stmt->close();
@@ -80,6 +157,113 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['toggle_follow']) && !
     $stmt->close();
     header('Location: profile.php?user_id=' . $profile_user_id);
     exit();
+}
+
+// Handle post deletion
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_post'])) {
+    $post_id = intval($_POST['post_id']);
+    
+    // Verify user owns this post
+    $stmt = $conn->prepare("SELECT user_id, image_path FROM posts WHERE id = ?");
+    $stmt->bind_param("i", $post_id);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $post_data = $result->fetch_assoc();
+    $stmt->close();
+    
+    if ($post_data && $post_data['user_id'] == $current_user_id) {
+        // Delete associated image file if it exists
+        if (!empty($post_data['image_path']) && file_exists($post_data['image_path'])) {
+            @unlink($post_data['image_path']);
+        }
+        
+        // Delete the post (cascade will handle likes and comments)
+        $stmt = $conn->prepare("DELETE FROM posts WHERE id = ? AND user_id = ?");
+        $stmt->bind_param("ii", $post_id, $current_user_id);
+        
+        if ($stmt->execute()) {
+            $update_success = 'Post deleted successfully!';
+        } else {
+            $update_error = 'Failed to delete post.';
+        }
+        $stmt->close();
+        
+        // Refresh the page
+        header('Location: profile.php' . ($is_own_profile ? '' : '?user_id=' . $profile_user_id));
+        exit();
+    } else {
+        $update_error = 'You can only delete your own posts.';
+    }
+}
+
+// Handle comment deletion
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_comment'])) {
+    $comment_id = intval($_POST['comment_id']);
+    
+    // Verify user owns this comment
+    $stmt = $conn->prepare("SELECT user_id FROM comments WHERE id = ?");
+    $stmt->bind_param("i", $comment_id);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $comment_data = $result->fetch_assoc();
+    $stmt->close();
+    
+    if ($comment_data && $comment_data['user_id'] == $current_user_id) {
+        $stmt = $conn->prepare("DELETE FROM comments WHERE id = ? AND user_id = ?");
+        $stmt->bind_param("ii", $comment_id, $current_user_id);
+        
+        if ($stmt->execute()) {
+            $update_success = 'Comment deleted successfully!';
+        } else {
+            $update_error = 'Failed to delete comment.';
+        }
+        $stmt->close();
+        
+        // Refresh the page
+        header('Location: profile.php' . ($is_own_profile ? '' : '?user_id=' . $profile_user_id));
+        exit();
+    } else {
+        $update_error = 'You can only delete your own comments.';
+    }
+}
+
+// Handle profile deletion
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_profile']) && $is_own_profile) {
+    // Get all posts with images to delete image files
+    $stmt = $conn->prepare("SELECT image_path FROM posts WHERE user_id = ? AND image_path IS NOT NULL");
+    $stmt->bind_param("i", $current_user_id);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $image_paths = [];
+    while ($row = $result->fetch_assoc()) {
+        if (!empty($row['image_path'])) {
+            $image_paths[] = $row['image_path'];
+        }
+    }
+    $stmt->close();
+    
+    // Delete image files
+    foreach ($image_paths as $image_path) {
+        if (file_exists($image_path)) {
+            @unlink($image_path);
+        }
+    }
+    
+    // Delete the user (CASCADE will handle posts, comments, likes, friendships)
+    $stmt = $conn->prepare("DELETE FROM users WHERE id = ?");
+    $stmt->bind_param("i", $current_user_id);
+    
+    if ($stmt->execute()) {
+        $stmt->close();
+        $conn->close();
+        
+        // Logout and redirect to login
+        logout();
+        exit();
+    } else {
+        $update_error = 'Failed to delete profile. Please try again.';
+        $stmt->close();
+    }
 }
 
 // Handle profile update (only for own profile)
@@ -136,7 +320,7 @@ $conn->close();
 <body>
     <nav class="navbar">
         <div class="nav-container">
-            <h2 class="nav-brand">Mini Social Media</h2>
+            <h2 class="nav-brand">Echo</h2>
             <div class="nav-links">
                 <a href="feed.php" class="nav-link">Feed</a>
                 <a href="search.php" class="nav-link">Search</a>
@@ -161,7 +345,15 @@ $conn->close();
                         <p class="email"><?php echo htmlspecialchars($user['email']); ?></p>
                     <?php endif; ?>
                     <p class="member-since">Member since <?php echo date('F Y', strtotime($user['created_at'])); ?></p>
-                    <p class="profile-stats"><?php echo $stats['post_count']; ?> posts</p>
+                    <div class="profile-stats">
+                        <span><strong><?php echo $stats['post_count']; ?></strong> posts</span>
+                        <a href="?user_id=<?php echo $profile_user_id; ?>&show=followers" class="profile-stat-link">
+                            <strong><?php echo $stats['followers_count']; ?></strong> followers
+                        </a>
+                        <a href="?user_id=<?php echo $profile_user_id; ?>&show=following" class="profile-stat-link">
+                            <strong><?php echo $stats['following_count']; ?></strong> following
+                        </a>
+                    </div>
                     <?php if (!$is_own_profile): ?>
                         <form method="POST" action="" style="margin-top: 10px;">
                             <button type="submit" name="toggle_follow" class="btn <?php echo $is_following ? 'btn-secondary' : 'btn-primary'; ?>">
@@ -217,6 +409,79 @@ $conn->close();
                             
                             <button type="submit" name="update_profile" class="btn btn-primary">Update Profile</button>
                         </form>
+                        
+                        <div style="margin-top: 30px; padding-top: 30px; border-top: 1px solid var(--border-color);">
+                            <h3 style="color: var(--error-color); margin-bottom: 16px; font-size: 16px;">Danger Zone</h3>
+                            <p style="color: var(--text-secondary); font-size: 14px; margin-bottom: 16px;">
+                                Once you delete your profile, there is no going back. All your posts, comments, and data will be permanently deleted.
+                            </p>
+                            <form method="POST" action="" onsubmit="return confirm('Are you absolutely sure you want to delete your profile? This action cannot be undone. All your posts, comments, and data will be permanently deleted.');">
+                                <button type="submit" name="delete_profile" class="btn btn-delete-profile">Delete Profile</button>
+                            </form>
+                        </div>
+                    </div>
+                <?php endif; ?>
+                
+                <!-- Followers/Following Modal -->
+                <?php if ($show_followers || $show_following): ?>
+                    <div class="modal-overlay" onclick="closeFollowersModal()">
+                        <div class="modal-content followers-modal" onclick="event.stopPropagation();">
+                            <div class="modal-header">
+                                <h2><?php echo $show_followers ? 'Followers' : 'Following'; ?></h2>
+                                <button class="close-button" onclick="closeFollowersModal()">×</button>
+                            </div>
+                            <div class="modal-body">
+                                <?php if ($show_followers): ?>
+                                    <?php if (empty($followers_list)): ?>
+                                        <p class="empty-state">No followers yet.</p>
+                                    <?php else: ?>
+                                        <div class="followers-list">
+                                            <?php foreach ($followers_list as $follower): ?>
+                                                <div class="follower-item">
+                                                    <a href="profile.php?user_id=<?php echo $follower['id']; ?>" class="follower-link">
+                                                        <div class="follower-avatar">
+                                                            <?php echo strtoupper(substr($follower['first_name'], 0, 1) . substr($follower['last_name'], 0, 1)); ?>
+                                                        </div>
+                                                        <div class="follower-info">
+                                                            <strong><?php echo htmlspecialchars($follower['first_name'] . ' ' . $follower['last_name']); ?></strong>
+                                                            <span class="follower-username">@<?php echo htmlspecialchars($follower['username']); ?></span>
+                                                            <?php if (!empty($follower['bio'])): ?>
+                                                                <p class="follower-bio"><?php echo htmlspecialchars($follower['bio']); ?></p>
+                                                            <?php endif; ?>
+                                                        </div>
+                                                    </a>
+                                                </div>
+                                            <?php endforeach; ?>
+                                        </div>
+                                    <?php endif; ?>
+                                <?php endif; ?>
+                                
+                                <?php if ($show_following): ?>
+                                    <?php if (empty($following_list)): ?>
+                                        <p class="empty-state">Not following anyone yet.</p>
+                                    <?php else: ?>
+                                        <div class="followers-list">
+                                            <?php foreach ($following_list as $following): ?>
+                                                <div class="follower-item">
+                                                    <a href="profile.php?user_id=<?php echo $following['id']; ?>" class="follower-link">
+                                                        <div class="follower-avatar">
+                                                            <?php echo strtoupper(substr($following['first_name'], 0, 1) . substr($following['last_name'], 0, 1)); ?>
+                                                        </div>
+                                                        <div class="follower-info">
+                                                            <strong><?php echo htmlspecialchars($following['first_name'] . ' ' . $following['last_name']); ?></strong>
+                                                            <span class="follower-username">@<?php echo htmlspecialchars($following['username']); ?></span>
+                                                            <?php if (!empty($following['bio'])): ?>
+                                                                <p class="follower-bio"><?php echo htmlspecialchars($following['bio']); ?></p>
+                                                            <?php endif; ?>
+                                                        </div>
+                                                    </a>
+                                                </div>
+                                            <?php endforeach; ?>
+                                        </div>
+                                    <?php endif; ?>
+                                <?php endif; ?>
+                            </div>
+                        </div>
                     </div>
                 <?php endif; ?>
                 
@@ -239,7 +504,43 @@ $conn->close();
                                     <div class="post-meta">
                                         <span><?php echo timeAgo($post['created_at']); ?></span>
                                         <span>❤️ <?php echo $post['like_count']; ?></span>
-                                        <span>💬 <?php echo $post['comment_count']; ?></span>
+                                        <button class="btn-comment" onclick="toggleComments(<?php echo $post['id']; ?>)">💬 <?php echo $post['comment_count']; ?></button>
+                                        <?php if ($post['is_owner'] && $is_own_profile): ?>
+                                            <form method="POST" action="" style="display: inline; margin-left: auto;" onsubmit="return confirm('Are you sure you want to delete this post? This action cannot be undone.');">
+                                                <input type="hidden" name="post_id" value="<?php echo $post['id']; ?>">
+                                                <button type="submit" name="delete_post" class="btn-delete-post">Delete Post</button>
+                                            </form>
+                                        <?php endif; ?>
+                                    </div>
+                                    
+                                    <!-- Comments Section -->
+                                    <div class="comments-section" id="comments-<?php echo $post['id']; ?>" style="display: none;">
+                                        <?php if (!empty($post['comments'])): ?>
+                                            <div class="comments-list">
+                                                <?php foreach ($post['comments'] as $comment): ?>
+                                                    <div class="comment">
+                                                        <div class="comment-author-avatar">
+                                                            <?php echo strtoupper(substr($comment['first_name'], 0, 1) . substr($comment['last_name'], 0, 1)); ?>
+                                                        </div>
+                                                        <div class="comment-content">
+                                                            <strong><?php echo htmlspecialchars($comment['first_name'] . ' ' . $comment['last_name']); ?></strong>
+                                                            <span><?php echo htmlspecialchars($comment['content']); ?></span>
+                                                            <small><?php echo timeAgo($comment['created_at']); ?></small>
+                                                        </div>
+                                                        <?php if ($comment['is_comment_owner']): ?>
+                                                            <form method="POST" action="" style="display: inline; margin-left: auto;" onsubmit="return confirm('Are you sure you want to delete this comment?');">
+                                                                <input type="hidden" name="comment_id" value="<?php echo $comment['id']; ?>">
+                                                                <button type="submit" name="delete_comment" class="btn-delete-comment" title="Delete comment">Delete Comment</button>
+                                                            </form>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                <?php endforeach; ?>
+                                            </div>
+                                        <?php else: ?>
+                                            <div class="comments-list">
+                                                <p style="color: var(--text-secondary); font-size: 14px; padding: 8px 0;">No comments yet.</p>
+                                            </div>
+                                        <?php endif; ?>
                                     </div>
                                 </div>
                             <?php endforeach; ?>
@@ -249,6 +550,30 @@ $conn->close();
             </div>
         </div>
     </div>
+    
+    <script>
+        function toggleComments(postId) {
+            const commentsSection = document.getElementById('comments-' + postId);
+            if (commentsSection.style.display === 'none') {
+                commentsSection.style.display = 'block';
+            } else {
+                commentsSection.style.display = 'none';
+            }
+        }
+        
+        function closeFollowersModal() {
+            const url = new URL(window.location);
+            url.searchParams.delete('show');
+            window.location.href = url.toString();
+        }
+        
+        // Close modal with Escape key
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'Escape') {
+                closeFollowersModal();
+            }
+        });
+    </script>
 </body>
 </html>
 

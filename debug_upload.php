@@ -68,5 +68,5 @@ $conn->close();
 
 echo "<hr>";
 echo "<p><a href='feed.php' style='color: #0095f6;'>Go to Feed</a></p>";
-?>
+
 
