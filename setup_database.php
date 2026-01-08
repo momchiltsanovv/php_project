@@ -57,8 +57,98 @@ if ($conn->query($create_table)) {
     echo "<p class='error'>✗ Failed to create table: " . $conn->error . "</p>";
 }
 
-// Step 5: Check if demo user exists, if not create it
-echo "<h3>Step 4: Setting Up Demo User...</h3>";
+// Create posts table
+echo "<h3>Step 4: Creating Posts Table...</h3>";
+$create_posts = "CREATE TABLE IF NOT EXISTS posts (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    content TEXT NOT NULL,
+    image_path VARCHAR(255) DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    INDEX idx_user_id (user_id),
+    INDEX idx_created_at (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4";
+
+if ($conn->query($create_posts)) {
+    echo "<p class='success'>✓ Posts table created!</p>";
+    
+    // Check if image_path column exists, if not add it (for existing databases)
+    $check_column = $conn->query("SHOW COLUMNS FROM posts LIKE 'image_path'");
+    if ($check_column->num_rows == 0) {
+        $add_column = $conn->query("ALTER TABLE posts ADD COLUMN image_path VARCHAR(255) DEFAULT NULL AFTER content");
+        if ($add_column) {
+            echo "<p class='success'>✓ Added image_path column to existing posts table!</p>";
+        }
+    }
+} else {
+    echo "<p class='error'>✗ Failed to create posts table: " . $conn->error . "</p>";
+}
+
+// Create friendships table
+echo "<h3>Step 5: Creating Friendships Table...</h3>";
+$create_friendships = "CREATE TABLE IF NOT EXISTS friendships (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    friend_id INT NOT NULL,
+    status ENUM('pending', 'accepted') DEFAULT 'accepted',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (friend_id) REFERENCES users(id) ON DELETE CASCADE,
+    UNIQUE KEY unique_friendship (user_id, friend_id),
+    INDEX idx_user_id (user_id),
+    INDEX idx_friend_id (friend_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4";
+
+if ($conn->query($create_friendships)) {
+    echo "<p class='success'>✓ Friendships table created!</p>";
+} else {
+    echo "<p class='error'>✗ Failed to create friendships table: " . $conn->error . "</p>";
+}
+
+// Create comments table
+echo "<h3>Step 6: Creating Comments Table...</h3>";
+$create_comments = "CREATE TABLE IF NOT EXISTS comments (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    post_id INT NOT NULL,
+    user_id INT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    INDEX idx_post_id (post_id),
+    INDEX idx_user_id (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4";
+
+if ($conn->query($create_comments)) {
+    echo "<p class='success'>✓ Comments table created!</p>";
+} else {
+    echo "<p class='error'>✗ Failed to create comments table: " . $conn->error . "</p>";
+}
+
+// Create likes table
+echo "<h3>Step 7: Creating Likes Table...</h3>";
+$create_likes = "CREATE TABLE IF NOT EXISTS likes (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    post_id INT NOT NULL,
+    user_id INT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    UNIQUE KEY unique_like (post_id, user_id),
+    INDEX idx_post_id (post_id),
+    INDEX idx_user_id (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4";
+
+if ($conn->query($create_likes)) {
+    echo "<p class='success'>✓ Likes table created!</p>";
+} else {
+    echo "<p class='error'>✗ Failed to create likes table: " . $conn->error . "</p>";
+}
+
+// Step 8: Check if demo user exists, if not create it
+echo "<h3>Step 8: Setting Up Demo User...</h3>";
 $check_user = $conn->query("SELECT id FROM users WHERE username = 'demo_user'");
 if ($check_user->num_rows == 0) {
     $hashed_password = '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi'; // password123
@@ -85,7 +175,7 @@ if ($check_user->num_rows == 0) {
     echo "<p class='info'>ℹ Demo user already exists</p>";
 }
 
-// Step 6: Count users
+// Step 9: Count users
 $count_result = $conn->query("SELECT COUNT(*) as count FROM users");
 $count = $count_result->fetch_assoc()['count'];
 echo "<p><strong>Total users in database:</strong> " . $count . "</p>";
