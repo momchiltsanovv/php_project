@@ -248,15 +248,20 @@ body {
 }
 
 .alert-success {
-    background-color: rgba(0, 149, 246, 0.1);
-    color: var(--success-color);
-    border: 1px solid rgba(0, 149, 246, 0.3);
+    background-color: rgba(66, 183, 42, 0.15);
+    color: #42b72a;
+    border: 1px solid rgba(66, 183, 42, 0.4);
+    font-weight: 500;
 }
 
 .alert-success a {
-    color: var(--success-color);
+    color: #42b72a;
     font-weight: 600;
     text-decoration: underline;
+}
+
+.alert-success a:hover {
+    color: #36a420;
 }
 
 /* Auth Footer */
