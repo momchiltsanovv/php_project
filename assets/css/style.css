@@ -794,8 +794,9 @@ body {
 
 .search-form {
     display: flex;
-    gap: 0;
+    gap: 12px;
     margin-bottom: 24px;
+    align-items: stretch;
 }
 
 .search-input {
@@ -807,6 +808,7 @@ body {
     transition: var(--transition);
     background: var(--bg-secondary);
     color: var(--text-color);
+    min-width: 0;
 }
 
 .search-input:focus {
@@ -817,6 +819,15 @@ body {
 
 .search-input::placeholder {
     color: var(--text-tertiary);
+}
+
+.search-form .btn {
+    width: auto;
+    min-width: 100px;
+    margin-top: 0;
+    padding: 9px 24px;
+    white-space: nowrap;
+    flex-shrink: 0;
 }
 
 .users-list {
